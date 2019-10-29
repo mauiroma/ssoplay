@@ -1,0 +1,13 @@
+## admin cli commands to edit the configuration
+embed-server --std-out=echo  --server-config=standalone-openshift.xml
+batch
+module add --name=com.mysql.jdbc --resources=/opt/eap/extensions/mysql-connector-java-8.0.12.jar --dependencies=javax.api,javax.resource.api,javax.transaction.api,javax.xml.bind.api
+
+/subsystem=datasources/jdbc-driver=mysql8:add(driver-name=mysql8,driver-module-name=com.mysql.jdbc,driver-xa-datasource-class-name=com.mysql.cj.jdbc.MysqlXADataSource, driver-class-name=com.mysql.cj.jdbc.Driver')
+/subsystem=datasources/data-source=KeycloakDS:remove()
+/subsystem=datasources/data-source=KeycloakDS:add(jndi-name=java:jboss/datasources/KeycloakDS,enabled=true,use-java-context=true,connection-url="$\{env.DB_DATABASE_URL\}?serverTimezone=UTC",driver-name=mysql8,user-name="\$\{env.DB_USERNAME\}",password="\$\{env.DB_PASSWORD\}")
+/subsystem=datasources/data-source=KeycloakDS:write-attribute(name="validate-on-match", value="true")
+/subsystem=datasources/data-source=KeycloakDS:write-attribute(name="valid-connection-checker-class-name", value="org.jboss.jca.adapters.jdbc.extensions.mysql.MySQLValidConnectionChecker")
+
+run-batch
+quit

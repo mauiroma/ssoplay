@@ -1,0 +1,278 @@
+---
+kind: Template
+apiVersion: v1
+metadata:
+  annotations:
+    iconClass: icon-sso
+    tags: sso,keycloak,jboss
+    version: 7.3.0.GA
+    openshift.io/display-name: Red Hat Single Sign-On 7.3 + External  DB (Persistent)
+    openshift.io/provider-display-name: Red Hat, Inc.
+    description: Template to create SSO 7.3 environemnt based on external  DB
+    template.openshift.io/long-description: This template defines resources needed
+      to develop Red Hat Single Sign-On 7.3 server based deployment, deployment configuration
+      for External Oracle DB using persistence, and securing RH-SSO communication using re-encrypt
+      TLS.
+    template.openshift.io/documentation-url: https://access.redhat.com/documentation/en/red-hat-single-sign-on/
+    template.openshift.io/support-url: https://access.redhat.com
+  name: sso73-x509-oracle-persistent
+labels:
+  template: sso73-x509-persistent
+  rhsso: 7.3.0.GA
+message: A new persistent RH-SSO service (using oracle) has been created in your
+  project. The admin username/password for accessing the master realm via the RH-SSO
+  console is ${SSO_ADMIN_USERNAME}/${SSO_ADMIN_PASSWORD}.
+  The HTTPS keystore used for serving secure content, the JGroups keystore used for
+  securing JGroups communications, and server truststore used for securing RH-SSO
+  requests were automatically created via OpenShift's service serving x509 certificate
+  secrets.
+parameters:
+- displayName: Application Name
+  description: The name for the application.
+  name: APPLICATION_NAME
+  value: sso
+  required: true
+- displayName: Custom RH-SSO Server Hostname
+  description: Custom hostname for the RH-SSO server.
+  name: SSO_HOSTNAME
+  value: ''
+  required: false
+- displayName: JGroups Cluster Password
+  description: The password for the JGroups cluster.
+  name: JGROUPS_CLUSTER_PASSWORD
+  from: "[a-zA-Z0-9]{32}"
+  generate: expression
+  required: true
+- displayName: Database JNDI URL
+  description: Database JNDI URL
+  name: DB_DATABASE_URL
+  value: jdbc:oracle:thin:@<HOST>:1521/<SID>
+  required: true
+- displayName: Datasource Minimum Pool Size
+  description: Sets xa-pool/min-pool-size for the configured datasource.
+  name: DB_MIN_POOL_SIZE
+  value: 5
+  required: false
+- displayName: Datasource Maximum Pool Size
+  description: Sets xa-pool/max-pool-size for the configured datasource.
+  name: DB_MAX_POOL_SIZE
+  value: 10
+  required: false
+- displayName: Database Username
+  description: Database user name
+  name: DB_USERNAME
+  required: true
+- displayName: Database Password
+  description: Database user password
+  name: DB_PASSWORD
+  required: true
+- displayName: ImageStream Namespace
+  description: Namespace in which the ImageStreams for Red Hat Middleware images are
+    installed. These ImageStreams are normally installed in the openshift namespace.
+    You should only need to modify this if you've installed the ImageStreams in a
+    different namespace/project.
+  name: IMAGE_STREAM_NAMESPACE
+  value: openshift
+  required: true
+- displayName: RH-SSO Administrator Username
+  description: RH-SSO Server administrator username
+  name: SSO_ADMIN_USERNAME
+  from: "[a-zA-Z0-9]{8}"
+  generate: expression
+  required: true
+- displayName: RH-SSO Administrator Password
+  description: RH-SSO Server administrator password
+  name: SSO_ADMIN_PASSWORD
+  from: "[a-zA-Z0-9]{32}"
+  generate: expression
+  required: true
+- displayName: RH-SSO Realm
+  description: Realm to be created in the RH-SSO server (e.g. demorealm).
+  name: SSO_REALM
+  value: ''
+  required: false
+- displayName: Container Memory Limit
+  description: Container memory limit.
+  name: MEMORY_LIMIT
+  value: 1Gi
+  required: false
+objects:
+- kind: Secret
+  apiVersion: v1
+  metadata:
+    name: "${APPLICATION_NAME}-db-credential"
+  stringData:
+    database-password: ${DB_PASSWORD}
+    database-user: ${DB_USERNAME}
+    - kind: Secret
+    apiVersion: v1
+    metadata:
+      name: "${APPLICATION_NAME}-sso-credential"
+    stringData:
+      sso-admin-password: ${SSO_ADMIN_PASSWORD}
+      sso-admin-user: ${SSO_ADMIN_USERNAME}    
+- kind: Service
+  apiVersion: v1
+  spec:
+    ports:
+    - port: 8443
+      targetPort: 8443
+    selector:
+      deploymentConfig: "${APPLICATION_NAME}"
+  metadata:
+    name: "${APPLICATION_NAME}"
+    labels:
+      application: "${APPLICATION_NAME}"
+    annotations:
+      description: The web server's https port.
+      service.alpha.openshift.io/serving-cert-secret-name: sso-x509-https-secret
+- kind: Service
+  apiVersion: v1
+  spec:
+    clusterIP: None
+    ports:
+    - name: ping
+      port: 8888
+    selector:
+      deploymentConfig: "${APPLICATION_NAME}"
+  metadata:
+    name: "${APPLICATION_NAME}-ping"
+    labels:
+      application: "${APPLICATION_NAME}"
+    annotations:
+      service.alpha.kubernetes.io/tolerate-unready-endpoints: 'true'
+      service.alpha.openshift.io/serving-cert-secret-name: sso-x509-jgroups-secret
+      description: The JGroups ping port for clustering.
+- kind: Route
+  apiVersion: v1
+  id: "${APPLICATION_NAME}-https"
+  metadata:
+    name: "${APPLICATION_NAME}"
+    labels:
+      application: "${APPLICATION_NAME}"
+    annotations:
+      description: Route for application's https service.
+  spec:
+    to:
+      name: "${APPLICATION_NAME}"
+    tls:
+      termination: reencrypt
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    name: "${APPLICATION_NAME}"
+    labels:
+      application: "${APPLICATION_NAME}"
+  spec:
+    strategy:
+      type: Recreate
+    triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - "${APPLICATION_NAME}"
+        from:
+          kind: ImageStreamTag
+          namespace: "${IMAGE_STREAM_NAMESPACE}"
+          name: sso73:latest
+    - type: ConfigChange
+    replicas: 1
+    selector:
+      deploymentConfig: "${APPLICATION_NAME}"
+    template:
+      metadata:
+        name: "${APPLICATION_NAME}"
+        labels:
+          deploymentConfig: "${APPLICATION_NAME}"
+          application: "${APPLICATION_NAME}"
+      spec:
+        terminationGracePeriodSeconds: 75
+        containers:
+        - name: "${APPLICATION_NAME}"
+          image: "${APPLICATION_NAME}"
+          imagePullPolicy: Always
+          resources:
+            limits:
+              memory: "${MEMORY_LIMIT}"
+          volumeMounts:
+          - name: sso-x509-https-volume
+            mountPath: "/etc/x509/https"
+            readOnly: true
+          - name: sso-x509-jgroups-volume
+            mountPath: "/etc/x509/jgroups"
+            readOnly: true
+          livenessProbe:
+            exec:
+              command:
+              - "/bin/bash"
+              - "-c"
+              - "/opt/eap/bin/livenessProbe.sh"
+            initialDelaySeconds: 60
+          readinessProbe:
+            exec:
+              command:
+              - "/bin/bash"
+              - "-c"
+              - "/opt/eap/bin/readinessProbe.sh"
+          ports:
+          - name: jolokia
+            containerPort: 8778
+            protocol: TCP
+          - name: http
+            containerPort: 8080
+            protocol: TCP
+          - name: https
+            containerPort: 8443
+            protocol: TCP
+          - name: ping
+            containerPort: 8888
+            protocol: TCP
+          env:
+          - name: SSO_HOSTNAME
+            value: "${SSO_HOSTNAME}"
+          - name: DB_USERNAME
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${APPLICATION_NAME}-db-credential
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${APPLICATION_NAME}-db-credential            
+          - name: DB_DATABASE_URL
+            value: "${DB_DATABASE_URL}"
+          - name: DB_MIN_POOL_SIZE
+            value: "${DB_MIN_POOL_SIZE}"
+          - name: DB_MAX_POOL_SIZE
+            value: "${DB_MAX_POOL_SIZE}"
+          - name: JGROUPS_PING_PROTOCOL
+            value: openshift.DNS_PING
+          - name: OPENSHIFT_DNS_PING_SERVICE_NAME
+            value: "${APPLICATION_NAME}-ping"
+          - name: OPENSHIFT_DNS_PING_SERVICE_PORT
+            value: '8888'
+          - name: X509_CA_BUNDLE
+            value: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+          - name: JGROUPS_CLUSTER_PASSWORD
+            value: "${JGROUPS_CLUSTER_PASSWORD}"
+          - name: SSO_ADMIN_USERNAME
+            valueFrom:
+              secretKeyRef:
+                key: sso-admin-user
+                name: ${APPLICATION_NAME}-sso-credential
+          - name: SSO_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: sso-admin-password
+                name: ${APPLICATION_NAME}-sso-credentials
+          - name: SSO_REALM
+            value: "${SSO_REALM}"
+        volumes:
+        - name: sso-x509-https-volume
+          secret:
+            secretName: sso-x509-https-secret
+        - name: sso-x509-jgroups-volume
+          secret:
+            secretName: sso-x509-jgroups-secret
